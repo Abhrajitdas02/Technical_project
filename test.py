@@ -1,14 +1,11 @@
-from selenium import webdriver
-from bs4 import BeautifulSoup
 import pandas as pd
 import os
 import time
-import re
 import threading
-import csv
+import json
+from selenium import webdriver
+from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 options = webdriver.ChromeOptions()
 options.add_argument("--disable-logging")
@@ -16,6 +13,7 @@ options.add_argument("--headless")
 options.add_argument("--log-level=1")
 options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
+# Load dynamic content
 def load_dynamic_content(driver, max_wait_time=60):
     def scroll_and_wait():
         last_height = driver.execute_script("return document.body.scrollHeight")
@@ -30,7 +28,7 @@ def load_dynamic_content(driver, max_wait_time=60):
             last_height = new_height
 
     scroll_and_wait()
-    time.sleep(2)  
+    time.sleep(2)
     images = driver.find_elements(By.TAG_NAME, "img")
 
     for img in images:
@@ -39,9 +37,8 @@ def load_dynamic_content(driver, max_wait_time=60):
             WebDriverWait(driver, 5).until(lambda d: img.get_attribute("complete") == "true")
         except Exception:
             print(f"Image did not load: {img.get_attribute('src')}")
-
+    
     print("All elements, including dynamic images and ads, should now be fully loaded.")
-
 
 def html(driver, file_index):
     load_dynamic_content(driver)
@@ -58,7 +55,6 @@ def html(driver, file_index):
     
     print(f"Page source saved successfully as {file_path}.")
     return file_path
-
 
 def convert_to_csv(file_path, file_index):
     data_dict = {'Tag': [], 'Title': [], 'Class': [], 'ID': []}
@@ -80,7 +76,6 @@ def convert_to_csv(file_path, file_index):
     print(f"Data saved successfully as {csv_path}.")
     return csv_path
 
-
 def fetch_and_save_to_csv(url, file_index):
     with webdriver.Chrome(options=options) as driver:
         driver.get(url)
@@ -88,64 +83,50 @@ def fetch_and_save_to_csv(url, file_index):
         csv_path = convert_to_csv(html_path, file_index)
     return csv_path
 
+def compare_csv_advanced(file1, file2, log_file="change.log", json_file="change.json"):
+    df1 = pd.read_csv(file1)
+    df2 = pd.read_csv(file2)
 
-def compare(file_list, log_file="change.log", key_column="Tag", fields_to_compare=["Class", "Title","ID"]):
-    added_count = 0
-    removed_count = 0
-    modified_count = 0
+    # Identify added/removed rows
+    added = pd.concat([df1, df2]).drop_duplicates(keep=False)
+    removed = pd.concat([df2, df1]).drop_duplicates(keep=False)
 
-    # Read the first CSV file into a dictionary by the key column
-    with open(file_list[0], 'r', encoding='utf-8') as f1:
-        reader1 = csv.DictReader(f1)
-        data1 = {row[key_column]: row for row in reader1}
+    # Compare the DataFrames
+    differences = df1.compare(df2)
 
-    # Read the second CSV file into a dictionary by the key column
-    with open(file_list[1], 'r', encoding='utf-8') as f2:
-        reader2 = csv.DictReader(f2)
-        data2 = {row[key_column]: row for row in reader2}
-
-    # Open the log file for writing changes
+    # Log changes to change.log
     with open(log_file, "w", encoding="utf-8") as log:
-        # Check for removed tags (present in data1 but not in data2)
-        for key in data1:
-            if key not in data2:
-                removed_count += 1
-                log.write(f"Tag removed: {data1[key]}\n")
-
-        # Check for added tags (present in data2 but not in data1)
-        for key in data2:
-            if key not in data1:
-                added_count += 1
-                log.write(f"Tag added: {data2[key]}\n")
-                
-            # Check for modified tags (same key in both, but differing fields)
-            else:
-                modified_fields = {}
-                for field in fields_to_compare:
-                    if data1[key].get(field) != data2[key].get(field):
-                        modified_fields[field] = {
-                            "file1": data1[key].get(field),
-                            "file2": data2[key].get(field)
-                        }
-
-                if modified_fields:
-                    modified_count += 1
-                    log.write(f"Tag modified for {key}:\n")
-                    for field, changes in modified_fields.items():
-                        log.write(f"  {field}: {changes['file1']} -> {changes['file2']}\n")
+        log.write("===== CHANGE LOG =====\n\n")
+        log.write(f"Added rows ({len(added)}):\n")
+        log.write(f"{added}\n\n")
         
-        # Summary of changes
-        total_changes = added_count + removed_count + modified_count
-        if total_changes == 0:
-            log.write("No changes detected, Automation test Passed!!\n")
-        else:
-            log.write(f"Total changes detected: {total_changes}\n")
-            log.write(f"  Tags added: {added_count}\n")
-            log.write(f"  Tags removed: {removed_count}\n")
-            log.write(f"  Tags modified: {modified_count}\n")
+        log.write(f"Removed rows ({len(removed)}):\n")
+        log.write(f"{removed}\n\n")
+        
+        log.write(f"Modified values:\n{differences}\n")
+        if len(added) == 0 and len(removed) == 0 and differences.empty:
+            log.write("No changes detected.\n")
+        log.write("===== SUMMARY =====\n")
+        log.write(f"Total rows added: {len(added)}\n")
+        log.write(f"Total rows removed: {len(removed)}\n")
+        log.write(f"Total modified: {len(differences)}\n")
 
-    print(f"Comparison complete. Check {log_file} for details.")
+    # Store the data in JSON file
+    change_data = {
+        "Added Rows": added.to_dict(orient="records"),
+        "Removed Rows": removed.to_dict(orient="records"),
+        "Modified Values": differences.to_dict(orient="records"),
+        "Summary": {
+            "Total rows added": len(added),
+            "Total rows removed": len(removed),
+            "Total modified": len(differences)
+        }
+    }
 
+    with open(json_file, "w", encoding="utf-8") as json_output:
+        json.dump(change_data, json_output, indent=4, ensure_ascii=False)
+    
+    print(f"Comparison complete. Check {log_file} and {json_file} for details.")
 
 def main(url1, url2):
     if not os.path.exists("data"):
@@ -163,9 +144,8 @@ def main(url1, url2):
 
     print("Completed fetching tags in real time for both URLs.")
 
-    # Compare the CSV data for differences
-    compare([f"data/test0.csv", f"data/test1.csv"], log_file="change.log")
-
+    # Compare the CSV data for differences using the updated compare_csv_advanced function
+    compare_csv_advanced(f"data/test0.csv", f"data/test1.csv", log_file="change.log", json_file="change.json")
 
 if __name__ == "__main__":
     url1 = "https://www.jiocinema.com/"
