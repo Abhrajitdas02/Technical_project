@@ -9,26 +9,41 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import pandas as pd
 import logging
+import csv
+import json
+from datetime import datetime
 
 
 options = webdriver.ChromeOptions()
 options.add_argument("--disable-logging")
 options.add_argument("--headless")
 
-logging.basicConfig(filename='change.log', level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 def load_elements(driver):
     print("Scrolling to load elements...")
-    last_height = driver.execute_script("return document.body.scrollHeight")          #Implementin the scroll function to fetch all code
-    adaptive_wait_time = 0.5
+    start_time = time.time()
+
+    try:
+        first_element = WebDriverWait(driver, 3).until(
+            EC.presence_of_element_located((By.TAG_NAME, "img"))
+        )
+        # Calculate the time taken to load the first element
+        adaptive_wait_time = time.time() - start_time
+    except Exception as e:
+        logging.warning(f"Error while waiting for the first element: {e}")
+        return
+    
+    last_height = driver.execute_script("return document.body.scrollHeight")  # Initial scroll height
 
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(adaptive_wait_time)
+        time.sleep(adaptive_wait_time)  # Use the dynamically calculated loading time as the wait time
         new_height = driver.execute_script("return document.body.scrollHeight")
 
-        if new_height == last_height:
+        if new_height == last_height:  # No new content loaded
             try:
+                # Wait for remaining elements to load
                 WebDriverWait(driver, 3).until(
                     EC.presence_of_all_elements_located((By.TAG_NAME, "img"))
                 )
@@ -37,8 +52,7 @@ def load_elements(driver):
                 logging.warning(f"Error while waiting for elements: {e}")
                 break
         else:
-            last_height = new_height
-            adaptive_wait_time = min(adaptive_wait_time + 0.1, 2)
+            last_height = new_height  # Update height for the next scroll
 
     print("All elements, including images, should now be fully loaded.")
 
@@ -60,7 +74,7 @@ def html(driver, file_index):                                                   
     except Exception as e:
         logging.error(f"Error in html function: {e}")
 
-def convert_to_csv(file_path, file_index):                                        #convert the html code to relevent csv file with relevent details using web scrapping
+def convert_to_csv(file_path, file_index):                                      #convert the html code to relevent csv file with relevent details using web scrapping
     try:
         print(f"Converting HTML to CSV for file index {file_index}...")
         data_dict = {'Tag': [], 'Title': [], 'Class': [], 'ID': []}
@@ -98,59 +112,89 @@ def fetch_and_save_to_csv(url, file_index):
     except Exception as e:
         logging.error(f"Error in fetch_and_save_to_csv function for URL {url}: {e}")
 
-def compare(file_list, log_file="change.log"):
+def compare(file_list, log_file="change.log", json_file="change.json"):
     try:
         print("Comparing files for changes...")
-        count = 0
-        added_tags = []
-        deleted_tags = []
-        modified_tags = []
+        added_rows = []
+        deleted_rows = []
+        modified_rows = []
 
+        # Read CSV files as lists of dictionaries
         with open(file_list[0], 'r', encoding='utf-8') as f1, open(file_list[1], 'r', encoding='utf-8') as f2:
-            f1 = [line.strip() for line in f1.readlines()]
-            f2= [line.strip() for line in f2.readlines()]
+            csv1 = list(csv.DictReader(f1))
+            csv2 = list(csv.DictReader(f2))
 
-        f1_set = set(f1)
-        f2_set = set(f2)
+        # Convert rows to sets of frozensets for detecting added and deleted rows
+        csv1_set = {frozenset(row.items()) for row in csv1}
+        csv2_set = {frozenset(row.items()) for row in csv2}
 
-        added_tags = list(f2_set - f1_set)
-        deleted_tags = list(f1_set - f2_set)
+        # Detect added and deleted rows
+        added_rows = [dict(row) for row in (csv2_set - csv1_set)]
+        deleted_rows = [dict(row) for row in (csv1_set - csv2_set)]
 
-        for line in f1_set & f2_set:
-            if f1.count(line) != f2.count(line):
-                modified_tags.append(line)
-                count += 1
+        # Create dictionaries for rows indexed by Tag for modification comparison
+        csv1_dict = {row["Tag"]: row for row in csv1 if "Tag" in row}
+        csv2_dict = {row["Tag"]: row for row in csv2 if "Tag" in row}
 
+        # Detect modified rows
+        common_tags = set(csv1_dict.keys()) & set(csv2_dict.keys())
+        for tag in common_tags:
+            row1 = csv1_dict[tag]
+            row2 = csv2_dict[tag]
+
+            # Compare specific columns for modifications
+            changes = {}
+            for field in ["Title", "Class", "ID"]:
+                if row1.get(field) != row2.get(field):
+                    changes[field] = {"Old": row1.get(field, ""), "New": row2.get(field, "")}
+
+            if changes:  # If any field is modified, add to modified rows
+                modified_rows.append({"Tag": tag, "Changes": changes})
+
+        # Save changes to log file with timestamps
         print("Logging changes to file...")
-        logging.info("===== CHANGE LOG =====")
+        with open(log_file, 'w', encoding='utf-8') as log:
+            log.write("===== CHANGE LOG =====\n\n")
 
-        logging.info(f"Added Tags ({len(added_tags)}):")
-        for tag in added_tags:
-            logging.info(f"  - {tag}")
-        
-        logging.info("")
+            log.write(f"Added Rows ({len(added_rows)}):\n")
+            for row in added_rows:
+                log.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Added: {row}\n")
+            log.write("\n")
 
-        logging.info(f"Deleted Tags ({len(deleted_tags)}):")
-        for tag in deleted_tags:
-            logging.info(f"  - {tag}")
+            log.write(f"Deleted Rows ({len(deleted_rows)}):\n")
+            for row in deleted_rows:
+                log.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Deleted: {row}\n")
+            log.write("\n")
 
-        logging.info("")
+            log.write(f"Modified Rows ({len(modified_rows)}):\n")
+            for row in modified_rows:
+                log.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Modified Tag: {row['Tag']}\n")
+                for field, change in row["Changes"].items():
+                    log.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {field}: Old: '{change['Old']}', New: '{change['New']}'\n")
+            log.write("\n")
 
-        logging.info(f"Modified Tags ({len(modified_tags)}):")
-        for tag in modified_tags:
-            logging.info(f"  - {tag}")
+            log.write("===== SUMMARY =====\n")
+            log.write(f"Total rows added: {len(added_rows)}\n")
+            log.write(f"Total rows deleted: {len(deleted_rows)}\n")
+            log.write(f"Total rows modified: {len(modified_rows)}\n")
 
-        if count == 0:
-            logging.info("No changes detected.")
+        # Save changes to JSON file
+        print("Saving changes to JSON file...")
+        changes_summary = {
+            "AddedRows": added_rows,
+            "DeletedRows": deleted_rows,
+            "ModifiedRows": modified_rows,
+            "Summary": {
+                "TotalAdded": len(added_rows),
+                "TotalDeleted": len(deleted_rows),
+                "TotalModified": len(modified_rows),
+            }
+        }
+        with open(json_file, 'w', encoding='utf-8') as json_out:
+            json.dump(changes_summary, json_out, indent=4)
 
-        logging.info("===== SUMMARY =====")
-        logging.info(f"Total tags added: {len(added_tags)}")
-        logging.info(f"Total tags deleted: {len(deleted_tags)}")
-        logging.info(f"Total tags modified: {len(modified_tags)}")
-        logging.info(f"Total changes detected: {len(added_tags) + len(deleted_tags) + len(modified_tags)}")
+        logging.info(f"Comparison complete. Check {log_file} and {json_file} for details.")
 
-
-        print(f"Comparison complete. Check {log_file} for details.")
     except Exception as e:
         logging.error(f"Error in compare function: {e}")
 
@@ -185,9 +229,5 @@ if __name__ == "__main__":
 #     url2 = "https://www.geeksforgeeks.org/"
 #     main(url1, url2)
     
-# if __name__ == "__main__":
-#     url1 = "https://www.geeksforgeeks.org/"
-#     url2 = "https://www.geeksforgeeks.org/"
-#     main(url1, url2)
 
 
