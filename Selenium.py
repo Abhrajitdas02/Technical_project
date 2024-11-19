@@ -22,28 +22,16 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 def load_elements(driver):
     print("Scrolling to load elements...")
-    start_time = time.time()
-
-    try:
-        first_element = WebDriverWait(driver, 3).until(
-            EC.presence_of_element_located((By.TAG_NAME, "img"))
-        )
-        # Calculate the time taken to load the first element
-        adaptive_wait_time = time.time() - start_time
-    except Exception as e:
-        logging.warning(f"Error while waiting for the first element: {e}")
-        return
-    
-    last_height = driver.execute_script("return document.body.scrollHeight")  # Initial scroll height
+    last_height = driver.execute_script("return document.body.scrollHeight")          #Implementin the scroll function to fetch all code
+    adaptive_wait_time = 0.5
 
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(adaptive_wait_time)  # Use the dynamically calculated loading time as the wait time
+        time.sleep(adaptive_wait_time)
         new_height = driver.execute_script("return document.body.scrollHeight")
 
-        if new_height == last_height:  # No new content loaded
+        if new_height == last_height:
             try:
-                # Wait for remaining elements to load
                 WebDriverWait(driver, 3).until(
                     EC.presence_of_all_elements_located((By.TAG_NAME, "img"))
                 )
@@ -52,7 +40,8 @@ def load_elements(driver):
                 logging.warning(f"Error while waiting for elements: {e}")
                 break
         else:
-            last_height = new_height  # Update height for the next scroll
+            last_height = new_height
+            adaptive_wait_time = min(adaptive_wait_time + 0.1, 2)
 
     print("All elements, including images, should now be fully loaded.")
 
@@ -119,39 +108,35 @@ def compare(file_list, log_file="change.log", json_file="change.json"):
         deleted_rows = []
         modified_rows = []
 
-        # Read CSV files as lists of dictionaries
+        
         with open(file_list[0], 'r', encoding='utf-8') as f1, open(file_list[1], 'r', encoding='utf-8') as f2:
             csv1 = list(csv.DictReader(f1))
             csv2 = list(csv.DictReader(f2))
 
-        # Convert rows to sets of frozensets for detecting added and deleted rows
+        
         csv1_set = {frozenset(row.items()) for row in csv1}
         csv2_set = {frozenset(row.items()) for row in csv2}
 
-        # Detect added and deleted rows
+       
         added_rows = [dict(row) for row in (csv2_set - csv1_set)]
         deleted_rows = [dict(row) for row in (csv1_set - csv2_set)]
 
-        # Create dictionaries for rows indexed by Tag for modification comparison
         csv1_dict = {row["Tag"]: row for row in csv1 if "Tag" in row}
         csv2_dict = {row["Tag"]: row for row in csv2 if "Tag" in row}
 
-        # Detect modified rows
         common_tags = set(csv1_dict.keys()) & set(csv2_dict.keys())
         for tag in common_tags:
             row1 = csv1_dict[tag]
             row2 = csv2_dict[tag]
 
-            # Compare specific columns for modifications
             changes = {}
             for field in ["Title", "Class", "ID"]:
                 if row1.get(field) != row2.get(field):
                     changes[field] = {"Old": row1.get(field, ""), "New": row2.get(field, "")}
 
-            if changes:  # If any field is modified, add to modified rows
+            if changes:  
                 modified_rows.append({"Tag": tag, "Changes": changes})
 
-        # Save changes to log file with timestamps
         print("Logging changes to file...")
         with open(log_file, 'w', encoding='utf-8') as log:
             log.write("===== CHANGE LOG =====\n\n")
@@ -173,12 +158,14 @@ def compare(file_list, log_file="change.log", json_file="change.json"):
                     log.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {field}: Old: '{change['Old']}', New: '{change['New']}'\n")
             log.write("\n")
 
+            if len(added_rows)+len(deleted_rows)+len(modified_rows)==0:
+                log.write(f"No changes detected.\n")
             log.write("===== SUMMARY =====\n")
             log.write(f"Total rows added: {len(added_rows)}\n")
             log.write(f"Total rows deleted: {len(deleted_rows)}\n")
             log.write(f"Total rows modified: {len(modified_rows)}\n")
+            log.write(f"Total rows modified: {len(added_rows)+len(deleted_rows)+len(modified_rows)}\n")
 
-        # Save changes to JSON file
         print("Saving changes to JSON file...")
         changes_summary = {
             "AddedRows": added_rows,
@@ -188,6 +175,7 @@ def compare(file_list, log_file="change.log", json_file="change.json"):
                 "TotalAdded": len(added_rows),
                 "TotalDeleted": len(deleted_rows),
                 "TotalModified": len(modified_rows),
+                "TotalChanges": len(added_rows)+len(deleted_rows)+len(modified_rows)
             }
         }
         with open(json_file, 'w', encoding='utf-8') as json_out:
@@ -198,7 +186,7 @@ def compare(file_list, log_file="change.log", json_file="change.json"):
     except Exception as e:
         logging.error(f"Error in compare function: {e}")
 
-def main(url1, url2):
+def main(url1, url2): 
     try:
         print("Setting up data directory...")
         if not os.path.exists("data"):
@@ -219,15 +207,18 @@ def main(url1, url2):
     except Exception as e:
         logging.error(f"Error in main function: {e}")
 
+# if __name__ == "__main__":
+#     url1 = "https://www.jiocinema.com/"
+#     url2 = "https://www.jiocinema.com/tv-shows"
+#     main(url1, url2)
+
 if __name__ == "__main__":
-    url1 = "https://www.jiocinema.com/"
-    url2 = "https://www.jiocinema.com/tv-shows"
+    url1 = "https://www.geeksforgeeks.org/"
+    url2 = "https://www.geeksforgeeks.org/"
     main(url1, url2)
 
-# if __name__ == "__main__":
-#     url1 = "https://www.geeksforgeeks.org/"
-#     url2 = "https://www.geeksforgeeks.org/"
-#     main(url1, url2)
+    
+
     
 
 
